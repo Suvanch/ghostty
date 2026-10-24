@@ -1,0 +1,25 @@
+# Washi: sumi ink on unbleached rice paper
+background = #efe5cf
+foreground = #2d2924
+cursor-color = #b8432f
+cursor-text = #f5eddc
+selection-background = #d9ccb0
+selection-foreground = #2d2924
+
+# sumi, shu (vermilion), koke (moss), kuchiba (ochre), ai (indigo), budō (plum), seiheki (teal), kinari
+palette = 0=#2d2924
+palette = 1=#b8432f
+palette = 2=#5e7046
+palette = 3=#a8781f
+palette = 4=#2f4f6f
+palette = 5=#7a4f6e
+palette = 6=#3d6e6a
+palette = 7=#c9bea8
+palette = 8=#7a6f5f
+palette = 9=#c9573f
+palette = 10=#6f8250
+palette = 11=#b8892c
+palette = 12=#3f6386
+palette = 13=#8c6080
+palette = 14=#4f807b
+palette = 15=#f7f0e1

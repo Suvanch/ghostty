@@ -1,0 +1,24 @@
+# Sumi: paper-white ink on an ink-black scroll
+background = #121110
+foreground = #e3d9c3
+cursor-color = #d0563f
+cursor-text = #121110
+selection-background = #332e27
+selection-foreground = #f2ead8
+
+palette = 0=#24211c
+palette = 1=#d0563f
+palette = 2=#8f9e62
+palette = 3=#c9a04f
+palette = 4=#6d8bab
+palette = 5=#a5849e
+palette = 6=#739f99
+palette = 7=#c8bead
+palette = 8=#7d7466
+palette = 9=#e06d52
+palette = 10=#a6b475
+palette = 11=#dcb563
+palette = 12=#85a2c0
+palette = 13=#b99ab2
+palette = 14=#8ab5ae
+palette = 15=#f2ead8

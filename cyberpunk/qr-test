@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Prints a neon QR code for https://google.com, to test scanning off the terminal.
+Two modules per character cell (half blocks), colored cyan -> pink like the ring.
+
+  qr-test             lit = the code's light modules, inside a lit frame (normal polarity,
+                      scans everywhere; the black terminal background plays "dark")
+  qr-test --inverted  lit = the code's dark modules, no frame (inverted polarity, looks
+                      more like the ring; needs a scanner that reads inverted codes)"""
+import math, sys
+import qrcode
+
+URL = "https://google.com"
+CY, MA = (0, 240, 255), (255, 42, 109)
+RST = "\x1b[0m"
+QUIET = 3  # border modules around the code
+
+def mix(a, b, t): return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+def main():
+    inverted = "--inverted" in sys.argv
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H, border=QUIET)
+    qr.add_data(URL); qr.make(fit=True)
+    m = qr.get_matrix()  # True = dark module; the border comes back as light modules
+    grid = [[v if inverted else not v for v in row] for row in m]
+    size = len(grid)
+    if size % 2: grid.append([grid[-1][0]] * size)  # pad to whole cells, same as the border
+    c = (size - 1) / 2
+    out = []
+    for y in range(0, len(grid), 2):
+        line = "  "
+        for x in range(size):
+            top, bot = grid[y][x], grid[y + 1][x]
+            ch = "█" if top and bot else "▀" if top else "▄" if bot else " "
+            if ch == " ": line += " "; continue
+            col = mix(CY, MA, (math.sin(math.atan2(y - c, x - c)) + 1) / 2)
+            line += f"\x1b[38;2;{col[0]};{col[1]};{col[2]}m{ch}"
+        out.append(line + RST)
+    print("\n" + "\n".join(out) + "\n")
+    mode = "inverted" if inverted else "normal"
+    print(f"  {URL}  (version {qr.version}, {size - 2 * QUIET}x{size - 2 * QUIET}, error correction H, {mode})\n")
+
+if __name__ == "__main__":
+    main()

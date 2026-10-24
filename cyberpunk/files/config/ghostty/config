@@ -1,0 +1,42 @@
+# Cyberpunk / Edgerunners + Matrix setup.
+# Previous ukiyo-e setup is in ukiyoe-backup/, the first neon one in neon-backup/
+
+# --- Theme (themes/Edgerunner): slate, indigo, purple, brown on black ---
+theme = Edgerunner
+window-theme = ghostty
+
+# --- Background: plain black, slightly see-through ---
+# 1 = solid black ... lower = more of the desktop shows through
+background-opacity = 0.9
+
+# --- Font ---
+# Share Tech Mono (HUD-style, Nerd Font patched as "ShureTechMono"); JetBrains
+# Mono covers anything it lacks, Noto CJK covers Japanese.
+font-family = "ShureTechMono Nerd Font Mono"
+font-family = "JetBrainsMono Nerd Font"
+font-family = "Noto Sans CJK JP"
+font-size = 14
+adjust-cell-height = 10%
+
+# --- Window: clean, generous margins ---
+window-padding-x = 24
+window-padding-y = 18
+window-padding-balance = true
+window-width = 110
+window-height = 30
+unfocused-split-opacity = 0.85
+
+# --- Cursor: a still block (purple, from the theme) ---
+cursor-style = block
+cursor-style-blink = false
+shell-integration-features = no-cursor
+
+# --- Behavior ---
+mouse-hide-while-typing = true
+confirm-close-surface = false
+
+# --- Shaders (applied in order; comment a line out to disable) ---
+# SCANLINES / VIGNETTE strength: constants at the top of crt.glsl
+custom-shader = /home/suvanch/.config/ghostty/shaders/sandevistan_trail.glsl
+custom-shader = /home/suvanch/.config/ghostty/shaders/crt.glsl
+custom-shader-animation = true

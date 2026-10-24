@@ -1,0 +1,37 @@
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "type": "file-raw",
+    "source": "/home/suvanch/.config/fastfetch/ghost-logo.txt",
+    "width": 24,
+    "height": 10,
+    "padding": { "top": 1, "left": 2, "right": 3 }
+  },
+  "display": {
+    "separator": "  ",
+    "color": { "keys": "blue", "title": "magenta" }
+  },
+  "modules": [
+    "title",
+    { "type": "custom", "format": "\u001b[90m─────────────────────────────────" },
+    { "type": "os",           "key": "  OS",       "keyColor": "magenta" },
+    { "type": "kernel",       "key": "  Kernel",   "keyColor": "magenta" },
+    { "type": "uptime",       "key": "  Uptime",   "keyColor": "magenta" },
+    { "type": "packages",     "key": "  Packages", "keyColor": "magenta" },
+    { "type": "shell",        "key": "  Shell",    "keyColor": "blue" },
+    { "type": "de",           "key": "  Desktop",  "keyColor": "blue" },
+    { "type": "terminal",     "key": "  Terminal", "keyColor": "blue" },
+    { "type": "terminalfont", "key": "  Font",     "keyColor": "blue" },
+    { "type": "custom", "format": "\u001b[90m─────────────────────────────────" },
+    { "type": "cpu",          "key": "  CPU",      "keyColor": "cyan", "temp": true },
+    { "type": "cpuusage",     "key": "  CPU Load", "keyColor": "cyan" },
+    { "type": "gpu",          "key": "  GPU",      "keyColor": "cyan" },
+    { "type": "memory",       "key": "  Memory",   "keyColor": "cyan" },
+    { "type": "swap",         "key": "  Swap",     "keyColor": "cyan" },
+    { "type": "disk",         "key": "  Disk",     "keyColor": "cyan", "folders": "/" },
+    { "type": "localip",      "key": "  Local IP", "keyColor": "cyan" },
+    { "type": "battery",      "key": "  Battery",  "keyColor": "cyan" },
+    "break",
+    "colors"
+  ]
+}

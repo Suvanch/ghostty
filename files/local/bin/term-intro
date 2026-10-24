@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Ink-wash moon intro showing tonight's real phase, then fastfetch draws the
+# finished painting beside system info. The shadowed disk appears first, the lit
+# part soaks in from its bright edge, then the phase name and seal. Any key skips.
+#
+# The phase is computed offline from the date. Your hemisphere (which side is lit,
+# and whether the moon looks upside-down) comes from your timezone; override it
+# with MOON_HEMISPHERE=south or MOON_HEMISPHERE=north. Preview another night with
+# MOON_DATE=2026-12-24 term-intro (any date `date -d` understands).
+
+LOGO_FILE="$HOME/.config/fastfetch/moon-logo.txt"
+PHASE_FILE="$HOME/.config/fastfetch/moon-phase.txt"  # read by fastfetch's 月 line
+FRAMES=36
+DELAY=0.04
+PAD="  "  # must match fastfetch logo padding.left
+
+ESC=$'\e'
+RST="${ESC}[0m"
+MOON_LIGHT="${ESC}[38;2;240;236;228m"  # lit surface (white)
+MOON_SEA="${ESC}[38;2;168;163;152m"    # maria, the darker "seas"
+MOON_DARK="${ESC}[38;2;46;43;38m"      # unlit part, faint earthshine
+DARK_BG="${ESC}[48;2;46;43;38m"
+INK="${ESC}[39m"                       # theme foreground
+WASH="${ESC}[90m"                      # pale grey wash
+SHU="${ESC}[31m"                       # vermilion
+SEAL="${ESC}[41;97m"                   # white on vermilion
+
+# Traditional names for the eight phases, shown vertically beside the moon
+NAME_JP=(新月 三日月 上弦 十三夜 満月 十六夜 下弦 有明)
+NAME_EN=("new moon" "waxing crescent" "first quarter" "waxing gibbous"
+         "full moon" "waning gibbous" "last quarter" "waning crescent")
+MIST=(
+"  ━━━━━━━━━      ━━━━━━━━     "
+"       ━━━━━━━━━━━     ━━━━   "
+)
+QUAD=(" " ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐ ▜ ▄ ▙ ▟ █)  # index = UL 1 + UR 2 + LL 4 + LR 8
+
+hemisphere() {
+    local tz
+    [[ -n $MOON_HEMISPHERE ]] && { echo "$MOON_HEMISPHERE"; return; }
+    tz=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime)
+    tz=${tz#*zoneinfo/}
+    if [[ $tz =~ ^(Australia|Antarctica)/|^Pacific/(Auckland|Chatham|Fiji|Tongatapu|Apia|Noumea)|^America/(Argentina|Santiago|Sao_Paulo|Montevideo|Asuncion|La_Paz|Lima)|^Africa/(Johannesburg|Maputo|Harare|Lusaka|Windhoek|Gaborone|Maseru|Mbabane)|^Indian/(Mauritius|Reunion) ]]; then
+        echo south
+    else
+        echo north
+    fi
+}
+
+# Prints "phase illum% litside", then for each of 10 rows three 24-cell strings:
+# lit quadrant mask, disk quadrant mask (hex digits) and maria flags (1/0)
+moon_cells() {
+    awk -v now="$(date -d "${MOON_DATE:-now}" +%s)" -v south="$([[ $(hemisphere) == south ]] && echo 1 || echo 0)" '
+    function sea(x, y,   i) {
+        for (i = 1; i <= 8; i++)
+            if (((x - mx[i]) / rx[i]) ^ 2 + ((y - my[i]) / ry[i]) ^ 2 <= 1) return 1
+        return 0
+    }
+    function bits(m) { return m % 2 + int(m / 2) % 2 + int(m / 4) % 2 + int(m / 8) }
+    BEGIN {
+        # Maria as ellipses on the near side, as seen from the northern hemisphere
+        split("-0.30 0.18 0.32 0.68 0.55 -0.58 -0.18 -0.45", mx, " ")
+        split("0.45 0.42 0.12 0.33 -0.15 0.05 -0.38 -0.42", my, " ")
+        split("0.24 0.14 0.18 0.09 0.10 0.22 0.15 0.08", rx, " ")
+        split("0.20 0.13 0.15 0.10 0.15 0.38 0.12 0.08", ry, " ")
+
+        # Moon age as a fraction of the synodic month since the new moon of 2000-01-06 18:14 UTC
+        pi = atan2(0, -1)
+        age = (now / 86400 + 2440587.5 - 2451550.1) / 29.530588853
+        age -= int(age); if (age < 0) age += 1
+        k = cos(2 * pi * age); waxing = age < 0.5
+        # New, quarter and full moons last about a day either side; the rest are in between
+        split("0.034 0.216 0.284 0.466 0.534 0.716 0.784 0.966", edge, " ")
+        for (phase = 0; phase < 8 && age >= edge[phase + 1]; phase++);
+        phase %= 8
+        side = (waxing != south) ? 1 : -1   # 1 = bright limb on the right
+        printf "%d %d %d\n", phase, (1 - k) / 2 * 100 + 0.5, side
+
+        # 24 cols x 10 rows of 2x2 sub-cells; terminal cells are ~2.4x taller than wide
+        for (r = 0; r < 10; r++) {
+            lit = disk = mar = ""
+            for (c = 0; c < 24; c++) {
+                lm = dm = 0
+                for (q = 0; q < 4; q++) {
+                    x = (2 * c + q % 2 + 0.5 - 24) / 24
+                    y = (10 - (2 * r + int(q / 2)) - 0.5) / 10
+                    if (x * x + y * y > 1) continue
+                    dm += 2 ^ q
+                    fx = south ? -x : x
+                    w = sqrt(1 - y * y)
+                    if (waxing ? fx > k * w : fx < -k * w) lm += 2 ^ q
+                }
+                # A rim cell can only hold one color: keep its round outline, in
+                # whichever of light or shadow covers most of it
+                if (dm < 15 && lm) lm = (bits(lm) * 2 >= bits(dm)) ? dm : 0
+                x = (2 * c + 1 - 24) / 24; y = (10 - 2 * r - 1) / 10
+                if (south) { x = -x; y = -y }
+                lit = lit sprintf("%x", lm); disk = disk sprintf("%x", dm)
+                mar = mar (lm == 15 && sea(x, y) ? 1 : 0)
+            }
+            print lit, disk, mar
+        }
+    }'
+}
+
+# Lay out every cell once: K kind, CH char, ST style, T frame it lands on,
+# and for lit moon cells D/TD, the shadowed version shown before the light arrives.
+# Kinds: p row padding, n row end, s space, d drawn at once, g graded ░ ▒ final,
+#        k wide kanji (grey first), w wide drawn at once
+N=0
+add() { K[N]=$1 CH[N]=$2 ST[N]=$3 T[N]=$4 D[N]=$5 TD[N]=$6; ((N++)); }
+
+layout() {
+    local r c lm dm j t td name nlen kr lit disk mar
+    { read -r PHASE ILLUM SIDE
+      for ((r = 0; r < 10; r++)); do read -r lit disk mar; LIT[r]=$lit DISK[r]=$disk MAR[r]=$mar; done
+    } < <(moon_cells)
+    name=${NAME_JP[PHASE]} nlen=${#name}
+
+    for ((r = 0; r < 10; r++)); do
+        add p
+        add s
+        for ((c = 0; c < 24; c++)); do
+            lm=$((16#${LIT[r]:c:1})) dm=$((16#${DISK[r]:c:1}))
+            j=$(((c * 7 + r * 13) % 4))
+            td=$((1 + j))
+            if ((dm == 0)); then
+                add s
+            elif ((lm == 0)); then
+                add d "${QUAD[dm]}" "$MOON_DARK" "$td"
+            else
+                # The light soaks in from the bright limb toward the terminator
+                ((SIDE > 0)) && t=$((6 + (23 - c) * 3 / 4 + j / 2)) || t=$((6 + c * 3 / 4 + j / 2))
+                if ((${MAR[r]:c:1})); then
+                    add g █ "$MOON_SEA" "$t" "$MOON_DARK█$RST" "$td"
+                elif ((lm < 15 && dm == 15)); then
+                    add g "${QUAD[lm]}" "$MOON_LIGHT$DARK_BG" "$t" "$MOON_DARK█$RST" "$td"
+                else
+                    add g "${QUAD[lm]}" "$MOON_LIGHT" "$t" "$MOON_DARK${QUAD[dm]}$RST" "$td"
+                fi
+            fi
+        done
+        add s; add s
+        kr=$((r - 2))
+        if ((kr >= 0 && kr < nlen)); then
+            add k "${name:kr:1}" "$INK" $((26 + kr * 2))
+        elif ((r == 7)); then
+            add w 墨 "$SEAL" 32
+        else
+            add s; add s
+        fi
+        add s
+        add n
+    done
+
+    for ((r = 0; r < ${#MIST[@]}; r++)); do
+        add p
+        for ((c = 0; c < ${#MIST[r]}; c++)); do
+            if [[ ${MIST[r]:c:1} == " " ]]; then
+                add s
+            else
+                add d ━ "$WASH" $((12 + c / 3 + (c * 7 + r * 13) % 4))
+            fi
+        done
+        add n
+    done
+}
+
+# render <frame> <left pad> <line end>; a frame past the last stroke draws the finished art
+render() {
+    local f=$1 pad=$2 eol=$3 out="" i age
+    for ((i = 0; i < N; i++)); do
+        case ${K[i]} in
+            p) out+=$pad; continue ;;
+            n) out+="$eol"$'\n'; continue ;;
+            s) out+=" "; continue ;;
+        esac
+        age=$((f - T[i]))
+        if ((age < 0)); then
+            if [[ -n ${D[i]} ]] && ((f >= TD[i])); then
+                out+=${D[i]}
+            elif [[ ${K[i]} == [kw] ]]; then
+                out+="  "
+            else
+                out+=" "
+            fi
+        elif [[ ${K[i]} == k ]] && ((age < 2)); then
+            out+="${WASH}${CH[i]}${RST}"
+        elif [[ ${K[i]} == g ]] && ((age < 2)); then
+            ((age == 0)) && out+="${ST[i]}░${RST}" || out+="${ST[i]}▒${RST}"
+        else
+            out+="${ST[i]}${CH[i]}${RST}"
+        fi
+    done
+    printf '%s' "$out"
+}
+
+(
+    export LC_ALL=C.UTF-8 # count block and kanji characters as single chars
+    layout
+    H=12
+    mkdir -p "${LOGO_FILE%/*}"
+    render 999 "" "" >"$LOGO_FILE"
+    printf '%s  %s · %s%% lit\n' "${NAME_EN[PHASE]}" "${NAME_JP[PHASE]}" "$ILLUM" >"$PHASE_FILE"
+
+    [[ -t 0 && -t 1 ]] || exit 0
+    trap 'printf "%s" "${ESC}[?25h"' EXIT
+    printf '%s\n' "${ESC}[?25l"
+    for ((f = 0; f <= FRAMES; f++)); do
+        ((f > 0)) && printf '%s' "${ESC}[${H}A"
+        render "$f" "$PAD" "${ESC}[K"
+        read -rsn1 -t "$DELAY" && break
+    done
+    # Return to where the animation started so fastfetch draws over it
+    printf '%s' "${ESC}[$((H + 1))A${ESC}[G"
+)
+
+command -v fastfetch >/dev/null && fastfetch
+
+# A random quote beneath the painting and system info
+QUOTES="$HOME/.config/fastfetch/quotes.txt"
+[[ -r $QUOTES ]] || exit 0
+IFS='|' read -r jp romaji en src < <(grep -v -e '^#' -e '^[[:space:]]*$' "$QUOTES" | shuf -n1)
+[[ -n $jp ]] || exit 0
+QPAD="    "
+(
+    export LC_ALL=C.UTF-8
+    printf '%s' "$QPAD"
+    if [[ -t 0 && -t 1 ]]; then
+        # Write the Japanese one character at a time, like brushwork
+        for ((i = 0; i < ${#jp}; i++)); do
+            printf '%s' "${jp:i:1}"
+            read -rsn1 -t 0.05 && { printf '%s' "${jp:i+1}"; break; }
+        done
+        printf '\n'
+    else
+        printf '%s\n' "$jp"
+    fi
+)
+printf '%s%s%s%s\n' "$QPAD" "${ESC}[90m" "$romaji" "$RST"
+printf '%s%s%s%s  %s— %s%s\n\n' "$QPAD" "${ESC}[90m" "$en" "$RST" "$SHU" "$src" "$RST"

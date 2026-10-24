@@ -1,0 +1,8 @@
+# --- Core Appearance ---
+theme = Catppuccin Mocha
+font-family = "Ubuntu Mono"
+font-size = 12
+
+# --- 3. Shaders ---
+# Ghostty lets you apply custom GLSL fragment shaders (like a retro CRT effect)
+# custom-shader = /home/yourusername/.config/ghostty/crt-shader.glsl

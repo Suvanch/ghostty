@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Animated ASCII sandevistan ring (left) + system info (right) + quote (bottom).
+The ring keeps spinning until any key is pressed. When qr-ring is installed next to this
+script and the window has room, the ring is the scannable QR creature from qr-ring instead."""
+import os, sys, time, math, random, shutil, platform, select, termios, tty
+import json, re, subprocess, textwrap, threading, urllib.request
+import importlib.machinery, importlib.util
+
+W, H = 40, 19
+QUOTES = [  # (line, who) from The Matrix (1999) and Cyberpunk: Edgerunners (2022)
+    ("Free your mind.", "Morpheus"),
+    ("There is no spoon.", "Spoon Boy"),
+    ("Welcome to the desert of the real.", "Morpheus"),
+    ("I know kung fu.", "Neo"),
+    ("Ignorance is bliss.", "Cypher"),
+    ("Dodge this.", "Trinity"),
+    ("Never send a human to do a machine's job.", "Agent Smith"),
+    ("Remember, all I'm offering is the truth. Nothing more.", "Morpheus"),
+    ("There's a difference between knowing the path and walking the path.", "Morpheus"),
+    ("I can only show you the door. You're the one that has to walk through it.", "Morpheus"),
+    ("What is real? How do you define 'real'?", "Morpheus"),
+    ("Follow the white rabbit.", "The Matrix"),
+    ("I'll take you to the moon.", "David Martinez"),
+    ("I want to go to the moon.", "Lucy"),
+]
+RAMP = " .:-=+*#%@"
+
+def rgb(r, g, b, bg=False): return f"\x1b[{48 if bg else 38};2;{int(r)};{int(g)};{int(b)}m"
+RST = "\x1b[0m"
+# Edgerunners neon: cyan, yellow, pink, red (matches the Ghostty Edgerunner theme)
+CY, YE, MA, DIM, FG = (0, 240, 255), (252, 238, 10), (255, 42, 109), (90, 96, 130), (214, 230, 240)
+RED = (255, 0, 60)
+
+def mix(a, b, t): return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
+
+def frame(t, w=W, h=H):
+    rows = []
+    for y in range(h):
+        line = []
+        for x in range(w):
+            nx = (x - w / 2) / (w / 2)
+            ny = (y - h / 2) / (h / 2) * 0.95
+            nx *= 1.0  # cell aspect handled by w≈2h
+            r = math.hypot(nx, ny); a = math.atan2(ny, nx)
+            ring = math.exp(-((r - (0.62 + 0.04 * math.sin(t * 2.0))) ** 2) / 0.006)
+            spokes = max(0, math.sin(a * 6 - t * 3.0)) ** 8 * (0.25 < r < 0.62)
+            core = math.exp(-r * r / 0.015) * (0.7 + 0.3 * math.sin(t * 6))
+            plasma = 0.18 * (math.sin(nx * 7 + t) + math.sin(ny * 9 - t * 1.3) + 1) * (r < 0.9)
+            outer = 0.5 * math.exp(-((r - 0.88) ** 2) / 0.0015) * (math.sin(a * 24 + t * 4) > 0.2)
+            v = min(1, ring + spokes * 0.8 + core + max(0, plasma) + outer)
+            if random.random() < 0.004: v = random.random()
+            ch = RAMP[min(len(RAMP) - 1, int(v * (len(RAMP) - 1)))]
+            if ch == " ": line.append(" "); continue
+            c = mix(CY, MA, (math.sin(a + t) + 1) / 2) if v < 0.8 else YE
+            line.append(rgb(*mix(DIM, c, min(1, v + 0.2))) + ch)
+        rows.append("".join(line) + RST)
+    return rows
+
+def rd(p):
+    try: return open(p).read()
+    except Exception: return ""
+
+VIRTUAL_NICS = ("lo", "docker", "veth", "br-", "virbr")
+
+class Stats:
+    """Live CPU / network rates from /proc, computed between calls to sample()."""
+    def __init__(self):
+        self.cpu, self.net, self.when = self._cpu(), self._net(), time.time()
+        self.cpu_pct, self.down, self.up = 0.0, 0.0, 0.0
+
+    def _cpu(self):
+        f = [int(x) for x in rd("/proc/stat").split("\n", 1)[0].split()[1:]]
+        idle = f[3] + (f[4] if len(f) > 4 else 0)  # idle + iowait
+        return sum(f), idle
+
+    def _net(self):
+        rx = tx = 0
+        for l in rd("/proc/net/dev").splitlines()[2:]:
+            name, data = l.split(":", 1)
+            if name.strip().startswith(VIRTUAL_NICS): continue
+            f = data.split(); rx += int(f[0]); tx += int(f[8])
+        return rx, tx
+
+    def sample(self):
+        cpu, net, now = self._cpu(), self._net(), time.time()
+        dt, dtotal = max(now - self.when, 1e-3), cpu[0] - self.cpu[0]
+        if dtotal > 0: self.cpu_pct = 1 - (cpu[1] - self.cpu[1]) / dtotal
+        self.down, self.up = (net[0] - self.net[0]) / dt, (net[1] - self.net[1]) / dt
+        self.cpu, self.net, self.when = cpu, net, now
+
+def cpu_temp():
+    for h in os.listdir("/sys/class/hwmon"):
+        if rd(f"/sys/class/hwmon/{h}/name").strip() in ("coretemp", "k10temp", "zenpower"):
+            t = rd(f"/sys/class/hwmon/{h}/temp1_input").strip()  # package temperature
+            if t: return int(t) / 1000
+    return None
+
+PING_HOST = "1.1.1.1"
+ping_ms = None  # updated by a background thread; None until the first reply
+
+def pinger():
+    global ping_ms
+    while True:
+        try:
+            out = subprocess.run(["ping", "-c1", "-W1", PING_HOST], capture_output=True, text=True).stdout
+            m = re.search(r"time=([\d.]+)", out)
+            ping_ms = float(m.group(1)) if m else -1  # -1 = no reply
+        except Exception:
+            ping_ms = -1
+        time.sleep(2)
+
+# "corpo": CNN's stock-market Fear & Greed index, cached so it costs nothing per terminal
+FNG_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+FNG_CACHE = os.path.expanduser("~/.cache/edgerunner-fetch/fear-greed.json")
+FNG_MAX_AGE = 30 * 60
+fng = None  # (score 0-100, rating), from the cache or a background fetch
+
+def fetch_fng():
+    global fng
+    try:
+        cached = json.load(open(FNG_CACHE))
+        fng = (cached["score"], cached["rating"])
+        if time.time() - os.path.getmtime(FNG_CACHE) < FNG_MAX_AGE: return
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(FNG_URL, headers={  # CNN rejects requests that don't look like a browser
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+            "Referer": "https://www.cnn.com/", "Origin": "https://www.cnn.com", "Accept": "application/json"})
+        data = json.load(urllib.request.urlopen(req, timeout=5))["fear_and_greed"]
+        fng = (data["score"], data["rating"])
+        os.makedirs(os.path.dirname(FNG_CACHE), exist_ok=True)
+        json.dump({"score": fng[0], "rating": fng[1]}, open(FNG_CACHE, "w"))
+    except Exception:
+        pass  # offline or blocked: keep the cached value, if any
+
+def speed(bps):
+    for unit in ("B/s", "KB/s", "MB/s"):
+        if bps < 1024 or unit == "MB/s": return f"{bps:.0f} {unit}" if unit == "B/s" else f"{bps:.1f} {unit}"
+        bps /= 1024
+
+def sysinfo(st):
+    osr = dict(l.split("=", 1) for l in rd("/etc/os-release").splitlines() if "=" in l)
+    mem = {l.split(":")[0]: int(l.split()[1]) for l in rd("/proc/meminfo").splitlines() if ":" in l and len(l.split()) > 1}
+    used = (mem.get("MemTotal", 0) - mem.get("MemAvailable", 0)) / 1048576
+    tot = mem.get("MemTotal", 0) / 1048576
+    up = float(rd("/proc/uptime").split()[0] or 0)
+    d = shutil.disk_usage("/")
+    pct = lambda f: f"{rgb(*FG)}{f * 100:3.0f}%{RST}"
+    temp = cpu_temp()
+    if fng is None: corpo = f"{rgb(*DIM)}…{RST}"
+    else:
+        tone = MA if fng[0] < 45 else YE if fng[0] > 55 else FG  # fear pink, greed yellow
+        corpo = f"{bar(fng[0] / 100)} {rgb(*FG)}{fng[0]:3.0f}{RST}  {rgb(*tone)}{fng[1]}{RST}"
+    ping = (f"{rgb(*DIM)}…{RST}" if ping_ms is None else f"{rgb(*MA)}offline{RST}" if ping_ms < 0
+            else f"{ping_ms:.0f} ms  {rgb(*DIM)}{PING_HOST}{RST}")
+    return [
+        ("os", osr.get("PRETTY_NAME", "linux").strip('"')),
+        ("uptime", f"{int(up // 3600)}h {int(up % 3600 // 60)}m"),
+        ("cpu", f"{bar(st.cpu_pct)} {pct(st.cpu_pct)}"),
+        ("temp", f"{bar(temp / 100)} {rgb(*FG)}{temp:3.0f}°C{RST}" if temp is not None else f"{rgb(*DIM)}n/a{RST}"),
+        ("mem", f"{bar(used / tot if tot else 0)} {pct(used / tot if tot else 0)}  {rgb(*DIM)}{used:.1f}/{tot:.1f} GiB{RST}"),
+        ("disk", f"{bar(d.used / d.total)} {pct(d.used / d.total)}  {rgb(*DIM)}{d.used / 2**30:.0f}/{d.total / 2**30:.0f} GiB{RST}"),
+        ("net", f"{rgb(*CY)}↓{RST} {speed(st.down):<11}{rgb(*MA)}↑{RST} {speed(st.up)}"),
+        ("ping", ping),
+        ("corpo", corpo),
+    ]
+
+def bar(frac, n=16):
+    k = round(min(max(frac, 0), 1) * n)
+    return rgb(*CY) + "▰" * k + rgb(*DIM) + "▱" * (n - k) + RST
+
+def right_panel(st):
+    user = f"{os.environ.get('USER', 'user')}@{platform.node()}"
+    out = [rgb(*YE) + "\x1b[1m" + user.upper() + RST, rgb(*DIM) + "─" * (len(user) + 6) + RST]
+    for row in sysinfo(st):
+        out.append(f"{rgb(*MA)}{row[0]:<7}{RST}{rgb(*FG)}{row[1]}{RST}" if row else "")
+    out.append("")
+    out.append("".join(rgb(*c) + "██" for c in [RED, MA, YE, CY]) + RST)
+    return out
+
+FPS = 20      # fixed, so the QR creature's flash timing stays even
+QR_FLASH = 3  # the creature shows its real code every 3rd frame (qr-ring --flash 3)
+
+def load_creature():
+    """(qr-ring module, its code) for the QR creature, drawn as qr-ring --diamond --decoy --dense.
+    None if qr-ring isn't next to this script or can't load (e.g. no qrcode module)."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "qr-ring")
+        loader = importlib.machinery.SourceFileLoader("qr_ring", path)
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("qr_ring", loader))
+        loader.exec_module(mod)
+        return mod, mod.build(False, False, True)
+    except Exception:
+        return None
+
+PANEL_W = 42  # widest stats line; fixed so the layout doesn't shift as numbers change
+GAP = 4       # columns between the ring and the stats
+MARGIN = 2    # minimum empty columns at each window edge
+
+def quote_block(q, who, typed, avail):
+    """The quote wrapped to `avail` columns, with only `typed` characters revealed.
+    Returns (lines, width); the width is of the finished quote, so it doesn't drift while typing."""
+    wrapped = textwrap.wrap(q, max(8, avail - 2))
+    tag = f"— {who}"
+    inline = 2 + len(wrapped[-1]) + 2 + len(tag) <= avail
+    lines, left = [], typed
+    for i, l in enumerate(wrapped):
+        shown = l[:max(0, left)]; left -= len(l) + 1
+        mark = f"{rgb(*YE)}▌{RST} " if i == 0 else "  "
+        lines.append(f"{mark}{rgb(*FG)}\x1b[3m{shown}{RST}")
+    if typed >= len(q):
+        if inline: lines[-1] += f"  {rgb(*DIM)}{tag}{RST}"
+        else: lines.append(f"  {rgb(*DIM)}{tag}{RST}")
+    width = max([2 + len(l) for l in wrapped] + [2 + len(wrapped[-1]) + 2 + len(tag) if inline else 2 + len(tag)])
+    return lines, width, len(wrapped) + (0 if inline else 1)
+
+def compose(t, cols, rows, right, q, who, typed, creature=None, show_code=True):
+    """Every screen line for this moment, centered for a cols x rows window.
+    The QR creature is drawn when it fits whole (it can't shrink and still scan); otherwise
+    the plain ring. The stats only appear when the full-size art and the stats both fit.
+    show_code: whether this frame shows the creature's real code or its scrambled stand-in."""
+    avail = cols - 2 * MARGIN
+    qlines, qwidth, qcount = quote_block(q, who, typed, avail)
+    if creature and creature[0].W <= avail and creature[0].H <= rows - 2 - qcount:
+        mod, code = creature
+        w, h, full = mod.W, mod.H, True
+        art = mod.frame(t, code if show_code else mod.scrambled(code, t), False, True, True, True)
+    else:
+        # Ring: full size if it fits, otherwise shrunk, keeping its w≈2h shape
+        h = min(H, rows - 2 - qcount)
+        w = min(W, avail, round(h * W / H))
+        h = min(h, round(w * H / W))
+        full = w == W and h == H
+        art = frame(t, w, h) if w >= 6 and h >= 3 else []
+    show_ring = bool(art)
+    show_panel = show_ring and full and avail >= w + GAP + PANEL_W
+    out = [""]
+    if show_ring:
+        block = w + GAP + PANEL_W if show_panel else w
+        pad = " " * ((cols - block) // 2)
+        top = (h - len(right)) // 2
+        for i, ring_line in enumerate(art):
+            info = right[i - top] if show_panel and 0 <= i - top < len(right) else ""
+            out.append(pad + ring_line + (" " * GAP + info if info else ""))
+        out.append("")
+    qpad = " " * max(0, (cols - qwidth) // 2)
+    out += [qpad + l for l in qlines]
+    return out
+
+def main():
+    if not sys.stdout.isatty(): return
+    for job in (pinger, fetch_fng): threading.Thread(target=job, daemon=True).start()
+    st = Stats(); time.sleep(0.2); st.sample()  # prime CPU / network rates
+    right = right_panel(st)
+    last_sample = time.time()
+    q, who = random.choice(QUOTES)
+    creature = load_creature()
+    # Animate on the alternate screen: it is redrawn whole every frame, so resizing
+    # can't scramble it. The final frame is printed to the normal screen on exit.
+    sys.stdout.write("\x1b[?1049h\x1b[?25l")
+    start = time.time()
+    fd = sys.stdin.fileno(); old = termios.tcgetattr(fd)
+    t, frame_no = 0, 0
+    try:
+        tty.setcbreak(fd)
+        termios.tcflush(fd, termios.TCIFLUSH)  # drop stray startup input so it isn't taken as a key
+        while True:
+            t = time.time() - start
+            if time.time() - last_sample >= 1.0:  # live stats, refreshed every second
+                st.sample(); right = right_panel(st); last_sample = time.time()
+            cols, rows = shutil.get_terminal_size()
+            lines = compose(t, cols, rows, right, q, who, int(t / 0.03),  # quote types itself in
+                            creature, frame_no % QR_FLASH == 0)
+            sys.stdout.write("\x1b[H" + "\x1b[K\r\n".join(lines[:rows]) + "\x1b[K\x1b[J"); sys.stdout.flush()
+            frame_no += 1
+            key = select.select([sys.stdin], [], [], max(0, start + frame_no / FPS - time.time()))[0]
+            if key and t > 0.5: break  # keys in the first 0.5 s are startup noise
+            if key: termios.tcflush(fd, termios.TCIFLUSH)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcflush(fd, termios.TCIFLUSH)  # don't leak the key into the prompt
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        cols, rows = shutil.get_terminal_size()
+        final = compose(t, cols, rows, right, q, who, len(q), creature)  # left on screen: the real code
+        sys.stdout.write("\x1b[?1049l\x1b[?25h" + "\n".join(final) + "\n\n"); sys.stdout.flush()
+
+if __name__ == "__main__":
+    main()

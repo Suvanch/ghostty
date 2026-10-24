@@ -1,0 +1,50 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+# Sumi prompt: minimal ink-wash style with kanji markers.
+# Colors are ANSI names, so they follow the Ghostty theme (Sumi or Washi).
+#
+#   ~/Desktop/Projects 枝 main ! 時 3s
+#   ›
+#
+# Only the modules listed in `format` are shown.
+
+add_newline = true
+format = """
+$directory$git_branch$git_status$python$cmd_duration
+$character"""
+
+[directory]
+style = "bold"
+format = "[$path]($style)[$read_only]($read_only_style) "
+truncation_length = 3
+truncate_to_repo = true
+truncation_symbol = "…/"
+read_only = " 錠"
+read_only_style = "red"
+
+# 枝 = branch
+[git_branch]
+symbol = "枝 "
+style = "bright-black"
+format = "[$symbol$branch]($style) "
+
+[git_status]
+style = "yellow"
+format = "([$all_status$ahead_behind]($style) )"
+
+# 蛇 = snake
+[python]
+symbol = "蛇 "
+style = "bright-black"
+format = '[${symbol}${version}( \($virtualenv\))]($style) '
+
+# 時 = time, shown when a command takes 2 seconds or more
+[cmd_duration]
+min_time = 2000
+style = "bright-black"
+format = "[時 $duration]($style) "
+
+# Grey when the last command succeeded, vermilion when it failed
+[character]
+success_symbol = "[›](bright-black)"
+error_symbol = "[›](red)"

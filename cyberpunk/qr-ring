@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""The QR creature: a breathing, tentacled ring around a scannable QR code for URL, with a red
+eye. edgerunner-fetch draws it as `qr-ring --diamond --decoy --dense --flash 3`; run it alone to
+try other options. The code is inverted (lit = the code's dark modules) and drawn two modules
+per cell with half blocks (or 2x3 sextant pixels with --diamond). Its module pattern never
+changes outside --flash/--burst stand-in frames; all the motion is color. Any key exits.
+See the README's design notes for why each effect still scans.
+
+  qr-ring               glowing code + dim ASCII texture in its dark cells + the ring
+  qr-ring --halo        also fill the space around the code with random modules, so the
+                        square disappears into a disc (circular-QR trick)
+  qr-ring --round       also round the corners of the three finder squares
+  qr-ring --decoy       also draw a fourth "eye" in the bottom-right corner, so the
+                        three finder squares read as a symmetric design
+  qr-ring --no-texture  no characters inside the code (for comparison)
+  qr-ring --dense       fill the code's dark cells with dense characters (@#$%&) instead of
+                        faint dots; kept dim (DENSE_K) so the cells still read as dark
+  qr-ring --diamond     turn the code 45 degrees, drawn with sextant pixels (2x3 per cell);
+                        the four eyes land at the top, right, bottom and left
+  qr-ring --flash N     show the real code only every Nth frame; the others are random
+                        modules, so the finder squares never sit still
+  qr-ring --burst       random modules, with the real code flashed up for BURST_ON
+                        seconds every BURST_EVERY seconds"""
+import math, random, select, shutil, sys, termios, time, tty
+import qrcode
+
+URL = "https://github.com/Suvanch"
+W, H = 47, 24          # cells; each cell is 1 module wide and 2 modules tall
+RADIUS = 25.5          # r = 1 in cells; the ring sits at r 0.84-0.90, so 47x24 just holds it
+QUIET = 2              # dark modules kept clear around the code
+HALO_R = 20.0          # radius (in modules) the --halo filler reaches
+RAMP = " .:-=+*#%@"
+GLITCH = "01<>/\\|=+*#%$&@"
+DIAMOND_S = 1.0       # --diamond module size, in cell widths (1.0 fits the same ring)
+TENTACLES, TWIST = 6, 1.2  # tentacles, and how far each spirals (radians) from root to tip
+BREATH = 3.0               # seconds per breath
+EYE_W, EYE_H, IRIS_R = 0.2, 0.1, 0.08  # the eye's half-width, half-height and iris radius (ring = 0.84)
+BLINK_EVERY = 4.3          # seconds between blinks
+# The eye's colors stay close in brightness: the scanner judges lit vs dark against nearby
+# modules, so a near-white lid next to a deep red would turn the red "dark"
+IRIS, IRIS_DEEP, PUPIL, SCLERA, LID = (255, 80, 60), (255, 50, 60), (235, 40, 55), (200, 60, 90), (255, 130, 110)
+DENSE, DENSE_K = "@#$%&", 0.35   # --dense characters and their brightness (1 = full color)
+YE, DIM = (252, 238, 10), (90, 96, 130)
+# The sweep runs green -> blue -> purple and back. Green and purple are near opposites, so a
+# straight blend between them would pass through gray; going through blue keeps every step clean.
+GR, BL, PU = (60, 240, 130), (40, 140, 255), (170, 90, 255)
+RST = "\x1b[0m"
+FPS = 20
+BURST_EVERY, BURST_ON = 3.0, 0.5
+
+def mix(a, b, t): return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
+def scale(c, k): return tuple(v * k for v in c)
+def fg(c): return f"\x1b[38;2;{int(c[0])};{int(c[1])};{int(c[2])}m"
+def bg(c): return f"\x1b[48;2;{int(c[0])};{int(c[1])};{int(c[2])}m"
+
+def build(round_finders, halo, decoy):
+    # Encoded in capitals: QR's alphanumeric mode (0-9, A-Z, space, $%*+-./:) packs it denser
+    # than bytes, so Q (25% recovery) keeps this URL at 25x25 where lowercase would need 29x29.
+    # Scanners treat the scheme and host case-insensitively, and GitHub usernames are too.
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q, border=0)
+    qr.add_data(URL.upper()); qr.make(fit=True)
+    m = qr.get_matrix(); n = len(m)
+    eyes = [(0, 0), (0, n - 7), (n - 7, 0)]
+    if decoy and qr.version > 1:
+        # A 7x7 frame around the alignment square: a thick ring with a dot, which looks like
+        # a finder but fails the scanner's 1:1:3:1:1 test. Costs ~24 data modules.
+        c = qrcode.util.pattern_position(qr.version)[-1] - 3
+        for i in range(7):
+            for y, x in ((c, c + i), (c + 6, c + i), (c + i, c), (c + i, c + 6)): m[y][x] = True
+        eyes.append((c, c))
+    if round_finders:
+        for fy, fx in eyes:
+            for dy, dx in ((0, 0), (0, 6), (6, 0), (6, 6)): m[fy + dy][fx + dx] = False
+    ox, oy = (W - n) // 2, (2 * H - n) // 2
+    cx, cy = ox + n / 2, oy + n / 2
+    rnd = random.Random(7)
+    fill = set()
+    if halo:
+        for sy in range(2 * H):
+            for x in range(W):
+                inside = ox - QUIET <= x < ox + n + QUIET and oy - QUIET <= sy < oy + n + QUIET
+                if not inside and math.hypot(x + 0.5 - cx, sy + 0.5 - cy) < HALO_R and rnd.random() < 0.45:
+                    fill.add((x, sy))
+    return m, n, ox, oy, cx, cy, fill
+
+def scrambled(code, t):
+    """The same code area filled with random modules (about as dense as a real code). Each
+    module re-rolls only twice a second, at staggered times, so it shimmers instead of strobing."""
+    n = code[1]
+    return ([[hash((i, j, int(t * 2 + (i * 31 + j * 17) % 20 / 20))) >> 3 & 1 == 1 for j in range(n)]
+             for i in range(n)],) + code[1:]
+
+def module(x, sy, code, halo):
+    """None outside the code area, else whether this module is lit."""
+    m, n, ox, oy, cx, cy, fill = code
+    if ox - QUIET <= x < ox + n + QUIET and oy - QUIET <= sy < oy + n + QUIET:
+        mx, my = x - ox, sy - oy
+        return 0 <= mx < n and 0 <= my < n and m[my][mx]
+    if halo and math.hypot(x + 0.5 - cx, sy + 0.5 - cy) < HALO_R:
+        return (x, sy) in fill
+    return None
+
+def rotated(px, py, cx, cy):
+    """The module under screen point (px, py) when the code is turned 45 degrees about its center.
+    Units are cell widths; a cell is 1 wide and 2 tall."""
+    dx, dy = px - cx, py - cy
+    return (math.floor(cx + (dx + dy) / math.sqrt(2) / DIAMOND_S),
+            math.floor(cy + (dy - dx) / math.sqrt(2) / DIAMOND_S))
+
+def pixels(mask, n):
+    """The block character with these pixels lit: n=2 half blocks (top, bottom), n=6 sextants
+    (bits 0..5 = top-left, top-right, middle-left, ...). Unicode leaves out the four sextant
+    patterns that already exist as space, full, left half and right half blocks."""
+    if n == 2: return "▀" if mask == 1 else "▄"
+    if mask in (21, 42): return "▌" if mask == 21 else "▐"
+    return chr(0x1FB00 + mask - 1 - (mask > 21) - (mask > 42))
+
+def breath(t):
+    """0..1 over one breath: a quicker eased inhale, then a longer exhale."""
+    p = t % BREATH / BREATH
+    return math.sin(p / 0.4 * math.pi / 2) ** 2 if p < 0.4 else math.cos((p - 0.4) / 0.6 * math.pi / 2) ** 2
+
+def heartbeat(t):
+    """A lub-dub pulse, about once a second."""
+    p = t % 1.1
+    return math.exp(-p * p / 0.003) + 0.6 * math.exp(-(p - 0.2) ** 2 / 0.003) + math.exp(-(p - 1.1) ** 2 / 0.003)
+
+def ring_radius(t, r):
+    """Where the ring sits; it swells with the breath, which reaches radius r 1.2*r seconds late."""
+    return 0.84 + 0.06 * breath(t - r * 1.2)
+
+TENTACLE_STEPS = 100  # distances from the center each tentacle's path is worked out at, per frame
+
+def tentacle_shapes(t):
+    """Per frame: each tentacle's path, as (center angle, half-width / r, fade) at each step
+    out from the center. They drift and curl on their own clocks (golden-angle offsets keep any
+    two from falling into step), thick at the root, thin at the tip, with a wave travelling out
+    along them. Their tips almost always just touch the ring, following it as it breathes; now
+    and then one pulls back for a moment."""
+    out = []
+    for i in range(TENTACLES):
+        ph = i * 2.39996
+        retract = 0.3 * max(0, math.sin(t * (0.21 + 0.05 * i) + ph)) ** 8
+        # the tip fades out over reach-0.03 .. reach+0.05, so this ends it right at the ring
+        reach = ring_radius(t, 0.84) - 0.06 + 0.015 * math.sin(t * (0.9 + 0.13 * i) + 2 * ph) - retract
+        root = i * 2 * math.pi / TENTACLES + 0.25 * t + 0.3 * math.sin(t * 0.31 + ph)
+        curl, wave = 1.1 * math.sin(t * 0.23 + 1.7 * ph), t * (2.2 + 0.3 * i) - ph
+        path = []
+        for k in range(TENTACLE_STEPS):
+            r = (k + 0.5) / TENTACLE_STEPS
+            if r > reach + 0.05: break
+            s = r / reach                                               # 0 at the root, 1 at the tip
+            center = root + TWIST * s + curl * s ** 2.5 + 0.35 * s * math.sin(7 * s - wave)
+            width = (0.095 * (1 - min(s, 1)) ** 0.7 + 0.02) / max(r, 0.05)  # as an angle
+            path.append((center, width, min(1, (reach + 0.05 - r) / 0.08)))
+        out.append(path)
+    return out
+
+def tentacles(r, a, shapes):
+    """0..1: how much of a tentacle is at (r, a)."""
+    k, best = int(r * TENTACLE_STEPS), 0
+    for path in shapes:
+        if k >= len(path): continue
+        center, width, fade = path[k]
+        d = (a - center + math.pi) % (2 * math.pi) - math.pi
+        if abs(d) < 3 * width: best = max(best, math.exp(-(d / width) ** 2) * fade)
+    return best
+
+def field(t, dx, dy, r, a, shapes):
+    """The light everything is drawn from: (v, yellow, breath here). The breath rolls outward
+    from the eye, so the ring swells a moment after the center does."""
+    R = RADIUS
+    b = breath(t - r * 1.2)
+    ring = (0.6 + 0.4 * b) * math.exp(-((r - ring_radius(t, r)) ** 2) / (0.002 + 0.002 * b))
+    plasma = (0.08 + 0.1 * b) * (math.sin(dx / R * 7 + t) + math.sin(dy / R * 9 - t * 1.3) + 1)
+    tent = tentacles(r, a, shapes) * min(1, max(0, (r - EYE_W) / 0.1))  # grow from around the eye, not over it
+    v = min(1, ring + max(0, plasma) + tent)
+    return v, min(1, max(0, 1.3 * tent - 0.1, (v - 0.75) / 0.2)), b
+
+def eye_state(t):
+    """Per frame: (lid openness, gaze x, gaze y, heartbeat). The eye holds a point, then darts
+    to the next one (a saccade), and blinks every BLINK_EVERY seconds."""
+    p = t % BLINK_EVERY
+    lid = 1 - math.sin(math.pi * p / 0.3) if p < 0.3 else 1
+    k = int(t / 1.7)
+    f = min(1, (t / 1.7 - k) * 1.7 / 0.15); f = f * f * (3 - 2 * f)
+    g0, g1 = random.Random(k - 1), random.Random(k)
+    a, b = (g0.uniform(-1, 1), g0.uniform(-1, 1)), (g1.uniform(-1, 1), g1.uniform(-1, 1))
+    return lid, (a[0] + (b[0] - a[0]) * f) * 0.045, (a[1] + (b[1] - a[1]) * f) * 0.022, heartbeat(t)
+
+def eye(ex, ey, state, b):
+    """(lit color, dark color or None) for a point in the eye, or None outside it. Colors only:
+    the code's modules are untouched, and every lit color stays bright enough to read as lit."""
+    lid, gx, gy, beat = state
+    edge = EYE_H * lid * (1 - (ex / EYE_W) ** 2)
+    if abs(ex) >= EYE_W or abs(ey) > edge: return None
+    if abs(ey) > edge - 0.022: return LID, scale(LID, 0.18)  # bright lid line, so the shape reads
+    d = math.hypot(ex - gx, ey - gy)
+    if abs(ex - gx) < 0.025 + 0.008 * b and d < IRIS_R * 0.9: return PUPIL, None  # slit, wider on an inhale
+    if d < IRIS_R:
+        c = scale(mix(IRIS, IRIS_DEEP, d / IRIS_R), 0.85 + 0.15 * beat)
+        return c, scale(c, 0.25)
+    return SCLERA, scale(SCLERA, 0.2)
+
+def sweep(t, a):
+    """The color turn that reads as spin."""
+    f = (math.sin(a + t) + 1)  # 0..2
+    return mix(GR, BL, f) if f < 1 else mix(BL, PU, f - 1)
+
+def lit_color(t, a, v, y, b):
+    return scale(mix(sweep(t, a), YE, y), 0.68 + 0.22 * b + 0.1 * v)  # breathes, never dim enough to flip
+
+def dark_color(t, a, v, y, b, k):
+    # Dim enough to stay "dark"; yellow is brighter to a camera, so it gets a little less
+    return scale(mix(sweep(t, a), YE, y), k * (0.25 + 0.35 * b + 0.4 * v) * (1 - 0.2 * y))
+
+_geometry = {}
+
+def geometry(diamond, cx, cy):
+    """Per cell, what never changes between frames: the module each of its pixels shows
+    (2 half blocks, or 2x3 sextant pixels sampled from the rotated grid), and its offset,
+    radius and angle from the center."""
+    key = (diamond, cx, cy)
+    if key not in _geometry:
+        R = RADIUS
+        grid = []
+        for row in range(H):
+            line = []
+            for x in range(W):
+                if diamond:
+                    spots = [rotated(x + (i + 0.5) / 2, 2 * row + (j + 0.5) * 2 / 3, cx, cy) for j in range(3) for i in range(2)]
+                else:
+                    spots = [(x, 2 * row), (x, 2 * row + 1)]
+                dx, dy = x + 0.5 - cx, 2 * row + 1 - cy
+                line.append((spots, dx, dy, math.hypot(dx, dy) / R, math.atan2(dy, dx)))
+            grid.append(line)
+        _geometry[key] = grid
+    return _geometry[key]
+
+def frame(t, code, halo, chars, dense=False, diamond=False):
+    cx, cy = code[4], code[5]
+    R = RADIUS
+    shapes, est = tentacle_shapes(t), eye_state(t)
+    rows = []
+    for row in range(H):
+        line = []
+        for x in range(W):
+            spots, dx, dy, r, a = geometry(diamond, cx, cy)[row][x]
+            cells = [module(mx, my, code, halo) for mx, my in spots]
+            v, y, b = field(t, dx, dy, r, a, shapes)
+            if any(c is not None for c in cells):  # code area: solid block pixels only
+                mask = sum(1 << i for i, c in enumerate(cells) if c)
+                # Characters keep each cell's polarity: on a lit cell a dark glyph over a bright
+                # background (still mostly bright to the camera), on a dark cell a faint one
+                ec = eye(dx / R, dy / R, est, b)
+                lit = ec[0] if ec else lit_color(t, a, v, y, b)
+                glitch = chars and not ec and random.random() < 0.015
+                if mask == (1 << len(cells)) - 1:
+                    c = lit
+                    if chars:
+                        ch = random.choice(GLITCH) if glitch else RAMP[1 + min(4, int(v * 5))]
+                        line.append(bg(c) + fg(scale(c, 0.2 if glitch else 0.25)) + ch + "\x1b[49m")
+                    else: line.append(fg(c) + "█")
+                elif mask: line.append(fg(lit) + pixels(mask, len(cells)))
+                elif ec:  # dark cell in the eye: a faint glow, or nothing in the pupil
+                    line.append(fg(ec[1]) + "@" if ec[1] else " ")
+                elif chars and dense:  # each cell re-rolls its character ~3x a second, staggered
+                    ch = DENSE[hash((x, row, int(t * 3 + (x * 7 + row * 13) % 10 / 10))) % len(DENSE)]
+                    line.append(fg(dark_color(t, a, v, y, b, DENSE_K)) + ch)
+                elif chars:
+                    ch = random.choice(GLITCH) if glitch else RAMP[1 + min(2, int(v * 3))]
+                    line.append(fg(dark_color(t, a, 1, y, 1, 0.35) if glitch else dark_color(t, a, v, y, b, 0.28)) + ch)
+                else: line.append(" ")
+                continue
+            # outside: the original ASCII ring, moved out to clear the code
+            if r > 0.95: line.append(" "); continue
+            if random.random() < 0.004: v = random.random()
+            ch = RAMP[min(len(RAMP) - 1, int(v * (len(RAMP) - 1)))]
+            if ch == " ": line.append(" "); continue
+            c = mix(sweep(t, a), YE, min(1, max(0, (v - 0.7) / 0.2)))
+            line.append(fg(mix(DIM, c, min(1, v + 0.2))) + ch)
+        rows.append("".join(line) + RST)
+    return rows
+
+def main():
+    if not sys.stdout.isatty(): return
+    halo, chars = "--halo" in sys.argv, "--no-texture" not in sys.argv
+    code = build("--round" in sys.argv, halo, "--decoy" in sys.argv)
+    flash = int(sys.argv[sys.argv.index("--flash") + 1]) if "--flash" in sys.argv else 0
+    burst = "--burst" in sys.argv
+    caption = f"{fg(DIM)}scan me · {URL} · any key to exit{RST}"
+    sys.stdout.write("\x1b[?1049h\x1b[?25l")
+    fd = sys.stdin.fileno(); old = termios.tcgetattr(fd)
+    start = time.time()
+    frame_no = 0
+    try:
+        tty.setcbreak(fd)
+        termios.tcflush(fd, termios.TCIFLUSH)
+        while True:
+            t = time.time() - start
+            show = frame_no % flash == 0 if flash else t % BURST_EVERY < BURST_ON if burst else True
+            shown = code if show else scrambled(code, t)
+            frame_no += 1
+            cols, rows = shutil.get_terminal_size()
+            pad = " " * max(0, (cols - W) // 2)
+            lines = [""] * max(0, (rows - H - 2) // 2) + [pad + l for l in frame(t, shown, halo, chars, "--dense" in sys.argv, "--diamond" in sys.argv)]
+            lines += ["", " " * max(0, (cols - 44) // 2) + caption]
+            sys.stdout.write("\x1b[H" + "\x1b[K\r\n".join(lines[:rows]) + "\x1b[K\x1b[J"); sys.stdout.flush()
+            # Fixed frame rate, so --flash timing doesn't drift with how long a frame takes to draw
+            wait = max(0, start + frame_no / FPS - time.time())
+            if select.select([sys.stdin], [], [], wait)[0] and t > 0.5: break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcflush(fd, termios.TCIFLUSH)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\x1b[?1049l\x1b[?25h"); sys.stdout.flush()
+
+if __name__ == "__main__":
+    main()

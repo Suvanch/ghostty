@@ -1,0 +1,18 @@
+# One quote per line: japanese|romaji|english|source
+# Lines starting with # are ignored. Add your own.
+蝸牛そろそろ登れ富士の山|katatsumuri soro soro nobore fuji no yama|O snail, climb Mount Fuji, but slowly, slowly.|Issa
+古池や蛙飛び込む水の音|furuike ya kawazu tobikomu mizu no oto|An old pond, a frog jumps in, the sound of water.|Bashō
+静かさや岩にしみ入る蝉の声|shizukasa ya iwa ni shimiiru semi no koe|Such stillness: the cicada's cry seeps into the rocks.|Bashō
+七転び八起き|nana korobi ya oki|Fall seven times, rise eight.|proverb
+一期一会|ichigo ichie|One time, one meeting. Treasure every encounter.|proverb
+千里の道も一歩から|senri no michi mo ippo kara|A journey of a thousand miles begins with a single step.|proverb
+塵も積もれば山となる|chiri mo tsumoreba yama to naru|Even dust, piled up, becomes a mountain.|proverb
+石の上にも三年|ishi no ue ni mo san nen|Sit on a cold stone for three years and it grows warm.|proverb
+継続は力なり|keizoku wa chikara nari|Persistence is power.|proverb
+急がば回れ|isogaba maware|If you are in a hurry, take the long way round.|proverb
+雨降って地固まる|ame futte ji katamaru|After the rain, the ground grows firm.|proverb
+猿も木から落ちる|saru mo ki kara ochiru|Even monkeys fall from trees.|proverb
+能ある鷹は爪を隠す|nō aru taka wa tsume wo kakusu|The skilled hawk hides its talons.|proverb
+井の中の蛙大海を知らず|i no naka no kawazu taikai wo shirazu|A frog in a well knows nothing of the great sea.|proverb
+花より団子|hana yori dango|Dumplings over flowers.|proverb
+知らぬが仏|shiranu ga hotoke|Not knowing is Buddha. Ignorance is bliss.|proverb

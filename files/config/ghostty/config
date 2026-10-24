@@ -1,0 +1,48 @@
+# Ukiyo-e / ink-wash setup. Previous neon setup is in neon-backup/
+
+# --- Theme ---
+# Washi = ink on paper, Sumi = dark scroll (both in themes/)
+# To follow the system light/dark mode: theme = light:Washi,dark:Sumi
+theme = Sumi
+background-opacity = 1
+window-theme = ghostty
+
+# --- Background print (Hokusai, public domain; files in backgrounds/) ---
+# *-sumi.jpg are pre-darkened copies (dimmer on the left where text sits).
+# Swap to great-wave-sumi.jpg for The Great Wave.
+background-image = /home/suvanch/.config/ghostty/backgrounds/red-fuji-sumi.jpg
+# BACKGROUND BRIGHTNESS: 0 = plain black ... 1 = brightest. Save, then Ctrl+Shift+, to see it.
+# (Need brighter than 1? Raise STRENGTH in backgrounds/sumi_tone.py and re-run it.)
+background-image-opacity = 0.6
+background-image-fit = cover
+background-image-position = center
+
+# --- Font ---
+font-family = "JetBrainsMono Nerd Font"
+font-family = "Noto Serif CJK JP"
+font-family = "Noto Sans CJK JP"
+font-size = 13
+adjust-cell-height = 12%
+
+# --- Window: wide margins like a scroll ---
+window-padding-x = 28
+window-padding-y = 20
+window-padding-balance = true
+window-width = 110
+window-height = 30
+unfocused-split-opacity = 0.9
+
+# --- Cursor: a vermilion block, still ---
+cursor-style = block
+cursor-style-blink = false
+shell-integration-features = no-cursor
+
+# --- Behavior ---
+mouse-hide-while-typing = true
+confirm-close-surface = false
+
+# --- Shaders (applied in order; comment a line out to disable) ---
+# PAPER TEXTURE strength (the "slate"): GRAIN, FIBERS, VIGNETTE at the top of washi_paper.glsl
+custom-shader = /home/suvanch/.config/ghostty/shaders/brush_trail.glsl
+custom-shader = /home/suvanch/.config/ghostty/shaders/washi_paper.glsl
+custom-shader-animation = true

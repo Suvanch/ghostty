@@ -1,0 +1,26 @@
+# Edgerunner: built from #000000, #424153 (slate), #333399 (indigo),
+# #663399 (purple), #663300 (brown). The base colors are too dark to read as
+# text on black, so text colors are lighter tints of the same hues.
+background = #000000
+foreground = #d4d3e0
+cursor-color = #9966cc
+cursor-text = #000000
+selection-background = #333399
+selection-foreground = #ffffff
+
+palette = 0=#424153
+palette = 1=#c2602a
+palette = 2=#8c8cd9
+palette = 3=#d9a066
+palette = 4=#5c5cc7
+palette = 5=#9966cc
+palette = 6=#a3a2c2
+palette = 7=#c9c8d6
+palette = 8=#6e6d85
+palette = 9=#d98a4f
+palette = 10=#a8a8e6
+palette = 11=#e6bf8c
+palette = 12=#7f7fdb
+palette = 13=#b38fdb
+palette = 14=#c0bfd9
+palette = 15=#f0eff7

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Animated ghost intro, then fastfetch draws the same ghost beside system info.
+# Press any key to skip the animation.
+
+LOGO=(
+"      ▄▄████████▄▄      "
+"    ▄██████████████▄    "
+"  ▄██████████████████▄  "
+"  ████████████████████  "
+"  ████   ██████   ████  "
+"  ████   ██████   ████  "
+"  ████████████████████  "
+"  ████████████████████  "
+"  ████████████████████  "
+"  ███▀ ▀██▀  ▀██▀ ▀███  "
+)
+LOGO_FILE="$HOME/.config/fastfetch/ghost-logo.txt"
+FRAMES=36
+DELAY=0.03
+PAD="  "  # must match fastfetch logo padding.left
+
+ESC=$'\e'
+H=${#LOGO[@]}
+
+# Cyclic gradient: purple -> blue -> cyan -> blue (TokyoNight colors)
+stops=("187 154 247" "122 162 247" "125 207 255" "122 162 247")
+STEPS=12
+PAL=()
+for ((s = 0; s < ${#stops[@]}; s++)); do
+    read -r r1 g1 b1 <<<"${stops[s]}"
+    read -r r2 g2 b2 <<<"${stops[(s + 1) % ${#stops[@]}]}"
+    for ((i = 0; i < STEPS; i++)); do
+        PAL+=("${ESC}[38;2;$((r1 + (r2 - r1) * i / STEPS));$((g1 + (g2 - g1) * i / STEPS));$((b1 + (b2 - b1) * i / STEPS))m")
+    done
+done
+N=${#PAL[@]}
+
+# render <phase> <visible rows> <left pad> <line end>
+render() {
+    local phase=$1 rows=$2 pad=$3 eol=$4 out="" line ch r c
+    for ((r = 0; r < H; r++)); do
+        line=${LOGO[r]}
+        out+=$pad
+        if ((r < rows)); then
+            for ((c = 0; c < ${#line}; c++)); do
+                ch=${line:c:1}
+                if [[ $ch == " " ]]; then
+                    out+=" "
+                else
+                    out+="${PAL[(c + r * 2 + phase) % N]}$ch"
+                fi
+            done
+        fi
+        out+="${ESC}[0m$eol"$'\n'
+    done
+    printf '%s' "$out"
+}
+
+(
+    export LC_ALL=C.UTF-8 # count the block characters as single chars
+    mkdir -p "${LOGO_FILE%/*}"
+    render "$FRAMES" "$H" "" "" >"$LOGO_FILE"
+
+    [[ -t 0 && -t 1 ]] || exit 0
+    trap 'printf "%s" "${ESC}[?25h"' EXIT
+    printf '%s\n' "${ESC}[?25l"
+    for ((f = 0; f <= FRAMES; f++)); do
+        ((f > 0)) && printf '%s' "${ESC}[${H}A"
+        rows=$((f * H / 14 + 1))
+        render "$f" "$rows" "$PAD" "${ESC}[K"
+        read -rsn1 -t "$DELAY" && break
+    done
+    # Return to where the animation started so fastfetch draws over it
+    printf '%s' "${ESC}[$((H + 1))A${ESC}[G"
+)
+
+command -v fastfetch >/dev/null && fastfetch
